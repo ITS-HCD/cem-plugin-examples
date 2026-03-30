@@ -16,10 +16,6 @@
  * ```
  */
 
-// ---------------------------------------------------------------------------
-// Types (kept minimal — we only use what the analyzer passes us)
-// ---------------------------------------------------------------------------
-
 interface TS {
   isClassDeclaration(node: ASTNode): boolean;
   isPropertyDeclaration(node: ASTNode): boolean;
@@ -29,7 +25,7 @@ interface TS {
 }
 
 interface ASTNode {
-  name?: { getText(): string };
+  name?: { getText(): string; escapedText?: string };
   jsDoc?: JSDoc[];
   parent?: ASTNode;
   modifiers?: Array<{ kind: number }>;
@@ -40,7 +36,7 @@ interface JSDoc {
 }
 
 interface JSDocTag {
-  tagName: { getText(): string };
+  tagName: { getText(): string; escapedText?: string };
   comment?: string;
 }
 
@@ -77,24 +73,9 @@ export interface PluginOptions {
   propertyName?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Parsing helpers
-// ---------------------------------------------------------------------------
-
-/**
- * `<caption>...</caption>` followed by the rest.
- */
 const CAPTION_RE = /^<caption>(?<caption>.*)<\/caption>\s*(?<rest>.*)/ms;
-
-/**
- * First line of plain text as caption, rest is content.
- */
 const NEWLINE_RE = /^(?<caption>[^\n]+)\n(?<rest>.*)/ms;
-
-/**
- * Extract lang and code from a fenced code block: ```lang\ncode\n```
- */
-const CODEBLOCK_RE = /^```(?<lang>\w*)\s*\n(?<code>[\s\S]*?)```\s*$/m;
+const CODEBLOCK_RE = /^```(?<lang>\w*)\s*\n(?<code>[\s\S]*?)```\s*$/ms;
 
 function parseExample(comment: string): Example | null {
   const RE = comment.startsWith("<caption>") ? CAPTION_RE : NEWLINE_RE;
@@ -105,7 +86,6 @@ function parseExample(comment: string): Example | null {
   const title = caption.trim();
   const body = rest.trim();
 
-  // Try to extract code from a fenced block
   const codeMatch = body.match(CODEBLOCK_RE);
   if (codeMatch?.groups) {
     return {
@@ -115,35 +95,16 @@ function parseExample(comment: string): Example | null {
     };
   }
 
-  // Fallback: treat the entire rest as code
   return { title, code: body };
 }
 
-// ---------------------------------------------------------------------------
-// Declaration lookup
-// ---------------------------------------------------------------------------
-
-function getDeclaration(
-  moduleDoc: ModuleDoc,
-  name: string,
-): Declaration | undefined {
-  return moduleDoc.declarations?.find((d) => d.name === name);
+function getNodeName(node: ASTNode): string | undefined {
+  return node.name?.escapedText ?? node.name?.getText();
 }
 
-function getMemberDoc(
-  moduleDoc: ModuleDoc,
-  className: string,
-  memberName: string,
-): Declaration | undefined {
-  const classDoc = getDeclaration(moduleDoc, className);
-  return classDoc?.members?.find(
-    (m) => m.name === memberName,
-  );
+function getTagName(tag: JSDocTag): string | undefined {
+  return tag.tagName.escapedText ?? tag.tagName.getText();
 }
-
-// ---------------------------------------------------------------------------
-// Core: extract @example tags → examples array
-// ---------------------------------------------------------------------------
 
 function extractExamples(
   node: ASTNode,
@@ -156,12 +117,7 @@ function extractExamples(
     if (!Array.isArray(jsdoc.tags)) continue;
 
     for (const tag of jsdoc.tags) {
-      try {
-        if (tag.tagName.getText() !== "example") continue;
-      } catch {
-        continue;
-      }
-
+      if (getTagName(tag) !== "example") continue;
       if (typeof tag.comment !== "string") continue;
 
       const example = parseExample(tag.comment);
@@ -175,9 +131,32 @@ function extractExamples(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Plugin export
-// ---------------------------------------------------------------------------
+function getDeclaration(
+  moduleDoc: ModuleDoc,
+  name: string,
+): Declaration | undefined {
+  return moduleDoc.declarations?.find((d) => d.name === name);
+}
+
+/**
+ * Resolve the target declaration for a node and extract its @example tags.
+ * Returns early if the node has no JSDoc or no @example tags to process.
+ */
+function processNode(
+  node: ASTNode,
+  doc: Declaration | undefined,
+  label: string,
+  moduleDoc: ModuleDoc,
+  context: { dev?: boolean },
+  propName: string,
+): void {
+  if (!doc) {
+    if (context.dev)
+      console.warn(`[cem-plugin-examples] ${label} not found in ${moduleDoc.path}`);
+    return;
+  }
+  extractExamples(node, doc, propName);
+}
 
 export function cemExamplesPlugin(options: PluginOptions = {}) {
   const propName = options.propertyName ?? "examples";
@@ -186,45 +165,23 @@ export function cemExamplesPlugin(options: PluginOptions = {}) {
     name: "cem-plugin-examples",
 
     analyzePhase({ ts, node, moduleDoc, context }: AnalyzePhaseParams): void {
-      if (!("jsDoc" in node)) return;
+      if (!node.jsDoc?.length) return;
 
       if (ts.isClassDeclaration(node)) {
-        const name = node.name?.getText();
+        const name = getNodeName(node);
         if (!name) return;
-        const doc = getDeclaration(moduleDoc, name);
-        if (!doc) {
-          if (context.dev)
-            console.warn(
-              `[cem-plugin-examples] Class ${name} not found in ${moduleDoc.path}`,
-            );
-          return;
-        }
-        extractExamples(node, doc, propName);
+        processNode(node, getDeclaration(moduleDoc, name), `Class ${name}`, moduleDoc, context, propName);
       } else if (ts.isPropertyDeclaration(node) || ts.isMethodDeclaration(node)) {
-        const memberName = node.name?.getText();
-        const className = node.parent?.name?.getText();
+        const memberName = getNodeName(node);
+        const className = node.parent ? getNodeName(node.parent) : undefined;
         if (!memberName || !className) return;
-        const doc = getMemberDoc(moduleDoc, className, memberName);
-        if (!doc) {
-          if (context.dev)
-            console.warn(
-              `[cem-plugin-examples] Member ${className}.${memberName} not found in ${moduleDoc.path}`,
-            );
-          return;
-        }
-        extractExamples(node, doc, propName);
+        const classDoc = getDeclaration(moduleDoc, className);
+        const memberDoc = classDoc?.members?.find((m) => m.name === memberName);
+        processNode(node, memberDoc, `Member ${className}.${memberName}`, moduleDoc, context, propName);
       } else if (ts.isFunctionDeclaration(node)) {
-        const name = node.name?.getText();
+        const name = getNodeName(node);
         if (!name) return;
-        const doc = getDeclaration(moduleDoc, name);
-        if (!doc) {
-          if (context.dev)
-            console.warn(
-              `[cem-plugin-examples] Function ${name} not found in ${moduleDoc.path}`,
-            );
-          return;
-        }
-        extractExamples(node, doc, propName);
+        processNode(node, getDeclaration(moduleDoc, name), `Function ${name}`, moduleDoc, context, propName);
       }
     },
   };
