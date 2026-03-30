@@ -1,0 +1,40 @@
+{
+  "name": "cem-plugin-examples",
+  "version": "1.0.0",
+  "description": "CEM analyzer plugin that extracts @example JSDoc tags into a structured examples array",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "custom-elements-manifest",
+    "cem",
+    "plugin",
+    "jsdoc",
+    "example",
+    "web-components"
+  ],
+  "author": "ITS-HCD",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ITS-HCD/cem-plugin-examples.git"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
