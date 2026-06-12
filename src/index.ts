@@ -63,6 +63,12 @@ export interface Example {
   title: string;
   code: string;
   lang?: string;
+  /**
+   * HTML for live rendering of the example (e.g. in Storybook or a reference
+   * site), sourced from a matching `@render` tag. Absent when no `@render`
+   * tag shares the example's title.
+   */
+  render?: string;
 }
 
 export interface PluginOptions {
@@ -106,29 +112,69 @@ function getTagName(tag: JSDocTag): string | undefined {
   return tag.tagName.escapedText ?? tag.tagName.getText();
 }
 
+function normalizeTitle(title: string): string {
+  return title.trim().toLowerCase();
+}
+
 function extractExamples(
   node: ASTNode,
   doc: Declaration,
   propName: string,
+  label: string,
+  context: { dev?: boolean },
 ): void {
   if (!node.jsDoc) return;
+
+  const examples: Example[] = [];
+  const renders = new Map<string, string>();
 
   for (const jsdoc of node.jsDoc) {
     if (!Array.isArray(jsdoc.tags)) continue;
 
     for (const tag of jsdoc.tags) {
-      if (getTagName(tag) !== "example") continue;
+      const tagName = getTagName(tag);
+      if (tagName !== "example" && tagName !== "render") continue;
       if (typeof tag.comment !== "string") continue;
 
-      const example = parseExample(tag.comment);
-      if (!example) continue;
+      const parsed = parseExample(tag.comment);
+      if (!parsed) continue;
 
-      if (!doc[propName]) {
-        doc[propName] = [];
+      if (tagName === "example") {
+        examples.push(parsed);
+      } else {
+        renders.set(normalizeTitle(parsed.title), parsed.code);
       }
-      (doc[propName] as Example[]).push(example);
     }
   }
+
+  if (!examples.length && !renders.size) return;
+
+  const matched = new Set<string>();
+  for (const example of examples) {
+    const key = normalizeTitle(example.title);
+    const render = renders.get(key);
+    if (render !== undefined) {
+      example.render = render;
+      matched.add(key);
+    }
+  }
+
+  if (context.dev) {
+    for (const key of renders.keys()) {
+      if (!matched.has(key)) {
+        console.warn(
+          `[cem-plugin-examples] @render "${key}" has no matching @example in ${label}`,
+        );
+      }
+    }
+  }
+
+  if (!examples.length) return;
+
+  if (!doc[propName]) {
+    doc[propName] = [];
+  }
+  (doc[propName] as Example[]).push(...examples);
 }
 
 function getDeclaration(
@@ -155,7 +201,7 @@ function processNode(
       console.warn(`[cem-plugin-examples] ${label} not found in ${moduleDoc.path}`);
     return;
   }
-  extractExamples(node, doc, propName);
+  extractExamples(node, doc, propName, label, context);
 }
 
 export function cemExamplesPlugin(options: PluginOptions = {}) {

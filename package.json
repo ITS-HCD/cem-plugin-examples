@@ -1,6 +1,6 @@
 {
   "name": "cem-plugin-examples",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "CEM analyzer plugin that extracts @example JSDoc tags into a structured examples array",
   "type": "module",
   "main": "dist/index.js",
